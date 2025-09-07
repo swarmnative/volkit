@@ -58,6 +58,12 @@ jobs:
       - name: Verify modules
         run: |
           go mod verify
+      - name: Vendor modules
+        run: |
+          go mod vendor
+      - name: Set GOFLAGS for vendor mode
+        run: |
+          echo "GOFLAGS=-mod=vendor" >> $GITHUB_ENV
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v6
         with:
