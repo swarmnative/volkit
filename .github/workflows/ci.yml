@@ -12,6 +12,14 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
+      - name: Re-generate go.sum (fresh each run)
+        run: |
+          set -e
+          rm -f go.sum || true
+          go clean -modcache
+          go env -w GOPROXY=https://proxy.golang.org
+          go mod tidy
+          go mod download
       - name: Vet
         run: go vet ./...
       - name: Test (race + cover)
