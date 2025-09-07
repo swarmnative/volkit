@@ -2,7 +2,6 @@ package ws
 
 import (
     "compress/flate"
-    "encoding/json"
     "net/http"
     "sync"
     "sync/atomic"

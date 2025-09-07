@@ -75,7 +75,7 @@ func WithGzipJSON(next http.Handler) http.Handler {
         defer rw.close()
         next.ServeHTTP(rw, r)
     })
-}
+})
 
 // WithHTTPMetrics records status class counters per process for observability
 func WithHTTPMetrics(next http.Handler) http.Handler {
@@ -98,7 +98,7 @@ func WithHTTPMetrics(next http.Handler) http.Handler {
             atomic.AddInt64(&http5xxTotal, 1)
         }
     })
-}
+})
 
 type statusRecorder struct {
     http.ResponseWriter
