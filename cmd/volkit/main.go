@@ -351,7 +351,7 @@ func main() {
 		}
 		w.WriteHeader(http.StatusBadRequest)
 		_, _ = w.Write([]byte("use ?pause=true|false"))
-	}
+	})
 	// Simple per-node ETag memory to avoid recomputing in hot path
 	var claimsETagMu sync.Mutex
 	node2ETag := map[string]string{}
