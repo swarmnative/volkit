@@ -3,6 +3,7 @@ name: publish
 on:
   push:
     branches: [ main ]
+    tags: [ 'v*' ]
     paths:
       - 'cmd/**'
       - 'internal/**'
@@ -13,127 +14,18 @@ on:
       - 'images/**'
       - 'supervisord.conf'
       - '.github/workflows/publish.yml'
-  tags:
-    - 'v*'
-  workflow_dispatch: {}
-
-concurrency:
-  group: publish-${{ github.ref }}
-  cancel-in-progress: false
-
-jobs:
-  changes:
-    name: Detect changes
-    runs-on: ubuntu-latest
-    outputs:
-      app_changed: ${{ steps.filter.outputs.app_changed }}
-      rclone_changed: ${{ steps.filter.outputs.rclone_changed }}
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dorny/paths-filter@v3
-        id: filter
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          filters: |
-            app_changed:
-              - 'cmd/**'
-              - 'internal/**'
-              - 'scripts/**'
-              - 'Dockerfile'
-              - 'go.mod'
-              - 'go.sum'
-              - 'supervisord.conf'
-            rclone_changed:
-              - 'images/volkit-rclone/**'
-
-  build_app:
-    name: Build & Publish volkit (controller/agent)
-    needs: changes
-    if: needs.changes.outputs.app_changed == 'true' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/volkit
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,format=short
-      - name: Build & push
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-  build_rclone:
-    name: Build & Publish volkit-rclone
-    needs: changes
-    if: needs.changes.outputs.rclone_changed == 'true' || startsWith(github.ref, 'refs/tags/v')
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
-    steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-qemu-action@v3
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Extract metadata (tags, labels)
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: |
-            ghcr.io/${{ github.repository_owner }}/volkit-rclone
-          tags: |
-            type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref == 'refs/heads/main' }}
-            type=sha,format=short
-      - name: Build & push rclone image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          file: ./images/volkit-rclone/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-name: publish
-
-on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
   pull_request:
     branches: [ main ]
   schedule:
-    - cron: '0 3 * * *'  # nightly
-  workflow_dispatch: {}
+    - cron: '0 3 * * *'
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Build mode'
+        required: false
+        type: choice
+        options: [ full, images-only ]
+        default: full
 
 permissions:
   contents: read
@@ -151,19 +43,15 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
-      - name: Harden Go module proxy/cache
+          go-version: '1.22.x'
+      - name: Configure Go module settings
         run: |
-          go env -w GOPROXY=https://proxy.golang.org,direct
+          go env -w GOPROXY=https://proxy.golang.org
           go env -w GOSUMDB=sum.golang.org
-          go clean -modcache
-      - name: Regenerate go.sum (ephemeral)
+      - name: Tidy and download modules
         run: |
-          rm -f go.sum || true
           go mod tidy
           go mod download
-      - name: Go mod download
-        run: go mod download
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v6
         with:
@@ -226,7 +114,7 @@ jobs:
           set -euo pipefail
           get_digest() { docker buildx imagetools inspect "$1" | awk '/Digest:/ {print $2; exit}'; }
           ALPINE_DIGEST=$(get_digest alpine:3.20)
-          GOLANG_DIGEST=$(get_digest golang:1.24-alpine)
+          GOLANG_DIGEST=$(get_digest golang:1.22-alpine)
           RCLONE_DIGEST=$(get_digest "${RCLONE_IMAGE}")
           HAPROXY_VER=$(docker run --rm alpine:3.20 sh -c 'apk update >/dev/null 2>&1; apk info -a haproxy | head -1' | tr -d '\r')
           FP_SRC="alpine=${ALPINE_DIGEST}|golang=${GOLANG_DIGEST}|rclone=${RCLONE_DIGEST}|haproxy=${HAPROXY_VER}"
