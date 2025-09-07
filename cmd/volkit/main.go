@@ -1,25 +1,36 @@
 package main
 
 import (
+	"bufio"
+	"bytes"
 	"context"
-	"encoding/json"
-	"log/slog"
-	"net/http"
+	"crypto/sha256"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"math/rand"
+	"net"
+	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
-	"sync/atomic"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
-    "runtime"
-	"fmt"
 
+	"github.com/gorilla/websocket"
 	"github.com/swarmnative/volkit/internal/controller"
-	"github.com/swarmnative/volkit/internal/ws"
 	"github.com/swarmnative/volkit/internal/httpserver"
+	"github.com/swarmnative/volkit/internal/issuer"
+	"github.com/swarmnative/volkit/internal/pki"
+	"github.com/swarmnative/volkit/internal/ws"
 )
 
 func main() {
@@ -173,6 +184,11 @@ func main() {
 		wsBroadcastCacheMiss  int64
 		agentStatusCount     int64
 		agentStatusRateLimit int64
+		wsBroadcastTotal int64
+		wsSendErrorsTotal int64
+		wsQueueDropTotal int64
+		wsBroadcastNodesTotal int64
+		wsBroadcastDurationMs int64
 	)
 
 	// per-node claims ETag cache (in-memory, version-scoped)
@@ -678,7 +694,7 @@ func main() {
 	})
 
 	// default to TLS-only unless explicitly allowed
-	handler := httpserver.WithRecovery(httpserver.WithRequestID(httpserver.WithHTTPMetrics(gzipIfJSON(mux))))
+	handler := httpserver.WithRecovery(httpserver.WithRequestID(httpserver.WithHTTPMetrics(httpserver.WithGzipJSON(mux))))
 	srv := &http.Server{Addr: ":8080", Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 	// Choose one of: SPIRE mTLS, file-based TLS, or plain HTTP
 	go func() {
@@ -701,7 +717,7 @@ func main() {
 			pair, err := tls.LoadX509KeyPair(serverCert, serverKey)
 			if err != nil { slog.Error("load server cert", "error", err); os.Exit(1) }
 			cfg.Certificates = []tls.Certificate{pair}
-			handlerTLS := httpserver.WithRecovery(httpserver.WithRequestID(httpserver.WithHTTPMetrics(gzipIfJSON(mux))))
+			handlerTLS := httpserver.WithRecovery(httpserver.WithRequestID(httpserver.WithHTTPMetrics(httpserver.WithGzipJSON(mux))))
 			srv = &http.Server{Addr: ":8080", Handler: handlerTLS, TLSConfig: cfg, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 15 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 1 << 20}
 			slog.Info("https (file mTLS) listening", slog.String("addr", ":8080"))
 			if err := srv.ListenAndServeTLS("", ""); err != nil && err != http.ErrServerClosed {
@@ -770,7 +786,7 @@ func main() {
 				cur := ctrl.ChangeVersion()
 				if cur > last {
 					last = cur
-					clients := int(atomic.LoadInt64(&wsClientsGauge))
+					clients := int(atomic.LoadInt64(&hub.ClientsGauge))
 					minMs := baseMin + clients*10
 					if minMs > maxMin { minMs = maxMin }
 					if time.Since(lastAt) >= time.Duration(minMs)*time.Millisecond {
