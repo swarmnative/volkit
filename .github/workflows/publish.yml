@@ -48,10 +48,16 @@ jobs:
         run: |
           go env -w GOPROXY=https://proxy.golang.org
           go env -w GOSUMDB=sum.golang.org
+      - name: Clean module cache
+        run: |
+          go clean -modcache
       - name: Tidy and download modules
         run: |
           go mod tidy
           go mod download
+      - name: Verify modules
+        run: |
+          go mod verify
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v6
         with:
