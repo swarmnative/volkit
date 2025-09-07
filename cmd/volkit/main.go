@@ -316,6 +316,180 @@ func main() {
 		})
 	}
 
+	mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+		if ctrl.Ready() == nil {
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+			return
+		}
+		http.Error(w, "not ready", http.StatusServiceUnavailable)
+	})
+	mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(ctrl.Snapshot())
+	})
+	mux.HandleFunc("/preflight", func(w http.ResponseWriter, r *http.Request) {
+		if err := ctrl.Preflight(); err != nil {
+			http.Error(w, err.Error(), http.StatusPreconditionFailed)
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	})
+	mux.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("reconcile scheduled"))
+		go ctrl.Nudge()
+	})
+	mux.HandleFunc("/maintenance/recompute", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r) { http.Error(w, "unauthorized", http.StatusUnauthorized); return }
+		if getenv("AUTH_DISABLE", "false") == "true" && r.TLS == nil { http.Error(w, "tls required", http.StatusForbidden); return }
+		go ctrl.Nudge()
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte("recompute scheduled"))
+	})
+	mux.HandleFunc("/maintenance/broadcast", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r) { http.Error(w, "unauthorized", http.StatusUnauthorized); return }
+		if getenv("AUTH_DISABLE", "false") == "true" && r.TLS == nil { http.Error(w, "tls required", http.StatusForbidden); return }
+		v := strings.TrimSpace(r.URL.Query().Get("pause"))
+		if v == "true" || v == "1" {
+			atomic.StoreInt32(&broadcastPaused, 1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("broadcast paused"))
+			return
+		}
+		if v == "false" || v == "0" {
+			atomic.StoreInt32(&broadcastPaused, 0)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("broadcast resumed"))
+			return
+		}
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte("use ?pause=true|false"))
+	})
+	// Simple per-node ETag memory to avoid recomputing in hot path
+	var claimsETagMu sync.Mutex
+	node2ETag := map[string]string{}
+	mux.HandleFunc("/claims", func(w http.ResponseWriter, r *http.Request) {
+		// unified auth
+		if !authOK(r) { http.Error(w, "unauthorized", http.StatusUnauthorized); return }
+		// harden: if AUTH_DISABLE=true but no TLS, deny /claims (sensitive)
+		if getenv("AUTH_DISABLE", "false") == "true" && r.TLS == nil { http.Error(w, "tls required", http.StatusForbidden); return }
+		n := strings.TrimSpace(r.URL.Query().Get("node"))
+		// per-node rate limit
+		if n != "" {
+			minMs := getenvInt("VOLKIT_CLAIMS_MIN_MS", 200)
+			key := "claims:" + n
+			if !tryRateLimit(key, time.Duration(minMs)*time.Millisecond) { http.Error(w, "too many requests", http.StatusTooManyRequests); return }
+		}
+		start := time.Now()
+		// enforce node binding when TLS is used and not disabled
+		if getenv("AUTH_DISABLE", "false") != "true" && n != "" {
+			pn := peerNodeFromTLS(r)
+			if pn == "" || !strings.EqualFold(n, pn) { http.Error(w, "forbidden", http.StatusForbidden); return }
+		}
+		claims := ctrl.ClaimsForNode(n)
+		// ETag support
+		var etag string
+		claimsETagMu.Lock()
+		etag = node2ETag[n]
+		claimsETagMu.Unlock()
+		if etag == "" {
+			bufTmp, _ := json.Marshal(claims)
+			sumTmp := sha256.Sum256(bufTmp)
+			etag = "\"" + hex.EncodeToString(sumTmp[:]) + "\""
+			claimsETagMu.Lock(); node2ETag[n] = etag; claimsETagMu.Unlock()
+		}
+		if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" && inm == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		w.Header().Set("ETag", etag)
+		w.Header().Set("Content-Type", "application/json")
+		// write body lazily if needed
+		buf, _ := json.Marshal(claims)
+		_, _ = w.Write(buf)
+		atomic.AddInt64(&claimsRequestsTotal, 1)
+		atomic.StoreInt64(&claimsDurationMs, time.Since(start).Milliseconds())
+	})
+	mux.HandleFunc("/claims/validate", func(w http.ResponseWriter, r *http.Request) {
+		if !authOK(r) { http.Error(w, "unauthorized", http.StatusUnauthorized); return }
+		n := strings.TrimSpace(r.URL.Query().Get("node"))
+		if getenv("AUTH_DISABLE", "false") != "true" && n != "" {
+			pn := peerNodeFromTLS(r)
+			if pn == "" || !strings.EqualFold(n, pn) { http.Error(w, "forbidden", http.StatusForbidden); return }
+		}
+		claims := ctrl.ClaimsForNode(n)
+		buf, _ := json.Marshal(claims)
+		sum := sha256.Sum256(buf)
+		etag := "\"" + hex.EncodeToString(sum[:]) + "\""
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"node": n, "count": len(claims), "etag": etag, "bytes": len(buf), "ts": time.Now().Unix()})
+	})
+	if getenv("VOLKIT_ENABLE_METRICS", "false") == "true" {
+		mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+			// minimal text exposition
+			w.Header().Set("Content-Type", "text/plain; version=0.0.4")
+			s := ctrl.Snapshot()
+			build := map[string]string{
+				"version": strings.TrimSpace(getenv("VOLKIT_BUILD_VERSION", "dev")),
+				"go_version": runtime.Version(),
+			}
+			_, _ = w.Write([]byte(
+				"# HELP volkit_build_info Build and runtime info\n" +
+				"# TYPE volkit_build_info gauge\n" +
+				"volkit_build_info{version=\"" + build["version"] + "\",go_version=\"" + build["go_version"] + "\"} 1\n" +
+				"# HELP volkit_http_claims_requests_total Total /claims requests\n" +
+				"# TYPE volkit_http_claims_requests_total counter\n" +
+				"volkit_http_claims_requests_total " + itoa(atomic.LoadInt64(&claimsRequestsTotal)) + "\n" +
+				"# HELP volkit_http_claims_duration_milliseconds Last /claims duration in ms\n" +
+				"# TYPE volkit_http_claims_duration_milliseconds gauge\n" +
+				"volkit_http_claims_duration_milliseconds " + itoa(atomic.LoadInt64(&claimsDurationMs)) + "\n" +
+				"# HELP volkit_reconcile_total Total reconcile loops\n" +
+					"# TYPE volkit_reconcile_total counter\n" +
+					"volkit_reconcile_total " + itoa(s.ReconcileTotal) + "\n" +
+					"# HELP volkit_reconcile_errors Total reconcile errors\n" +
+					"# TYPE volkit_reconcile_errors counter\n" +
+					"volkit_reconcile_errors " + itoa(s.ReconcileErrors) + "\n" +
+					"# HELP volkit_mounter_running Whether rclone mounter is running\n" +
+					"# TYPE volkit_mounter_running gauge\n" +
+					"volkit_mounter_running " + bool01(s.MounterRunning) + "\n" +
+					"# HELP volkit_mount_writable Whether mountpoint is writable\n" +
+					"# TYPE volkit_mount_writable gauge\n" +
+					"volkit_mount_writable " + bool01(s.MountWritable) + "\n" +
+					"# HELP volkit_heal_attempts_total Total heal attempts\n" +
+					"# TYPE volkit_heal_attempts_total counter\n" +
+					"volkit_heal_attempts_total " + itoa(s.HealAttemptsTotal) + "\n" +
+					"# HELP volkit_heal_success_total Total heal success\n" +
+					"# TYPE volkit_heal_success total counter\n" +
+					"volkit_heal_success_total " + itoa(s.HealSuccessTotal) + "\n" +
+					"# HELP volkit_last_heal_success_timestamp Seconds since epoch of last heal success\n" +
+					"# TYPE volkit_last_heal_success_timestamp gauge\n" +
+					"volkit_last_heal_success_timestamp " + itoa(s.LastHealSuccessUnix) + "\n" +
+					"# HELP volkit_orphan_cleanup_total Total orphaned mounters cleaned\n" +
+					"# TYPE volkit_orphan_cleanup_total counter\n" +
+					"volkit_orphan_cleanup_total " + itoa(s.OrphanCleanupTotal) + "\n" +
+					"# HELP volkit_volume_created_total Total named volumes created\n" +
+					"# TYPE volkit_volume_created_total counter\n" +
+					"volkit_volume_created_total " + itoa(s.VolumeCreatedTotal) + "\n" +
+					"# HELP volkit_volume_reclaimed_total Total named volumes reclaimed\n" +
+					"# TYPE volkit_volume_reclaimed_total counter\n" +
+					"volkit_volume_reclaimed_total " + itoa(s.VolumeReclaimedTotal) + "\n" +
+					"# HELP volkit_volume_drift_total Managed volumes with unexpected device root\n" +
+					"# TYPE volkit_volume_drift_total counter\n" +
+					"volkit_volume_drift_total " + itoa(s.VolumeDriftTotal) + "\n" +
+					"# HELP volkit_reconcile_duration_milliseconds Last reconcile duration in ms\n" +
+					"# TYPE volkit_reconcile_duration_milliseconds gauge\n" +
+					"volkit_reconcile_duration_milliseconds " + itoa(ctrl.Snapshot().ReconcileDurationMs) + "\n" +
+					"# HELP volkit_mounter_created_total Total mounter containers created\n" +
+					"# TYPE volkit_mounter_created_total counter\n" +
+					""))
+		})
+	}
 	// hints moved into httpserver
 
 	// Serve CA certificate for agents to bootstrap (read-only)
