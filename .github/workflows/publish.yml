@@ -39,40 +39,22 @@ env:
 jobs:
   go-ci:
     runs-on: ubuntu-latest
+    env:
+      GOSUMDB: off
+      GOTOOLCHAIN: local
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
           go-version: '1.22.x'
-      - name: Configure Go module settings
-        run: |
-          go env -w GOPROXY=https://proxy.golang.org
-          go env -w GOSUMDB=sum.golang.org
-      - name: Clean module cache
-        run: |
-          go clean -modcache
-      - name: Tidy and download modules
-        run: |
-          go mod tidy
-          go mod download
-      - name: Reconcile go.sum if checksum mismatch (ephemeral)
-        continue-on-error: true
+      - name: Re-generate go.sum (fresh each run)
         run: |
           set -e
-          if ! go mod verify; then
-            rm -f go.sum
-            go mod tidy
-            go mod download
-          fi
-      - name: Verify modules
-        run: |
-          go mod verify
-      - name: Vendor modules
-        run: |
-          go mod vendor
-      - name: Set GOFLAGS for vendor mode
-        run: |
-          echo "GOFLAGS=-mod=vendor" >> $GITHUB_ENV
+          rm -f go.sum || true
+          go clean -modcache
+          go env -w GOPROXY=https://proxy.golang.org
+          go mod tidy
+          go mod download
       - name: Lint (golangci-lint)
         uses: golangci/golangci-lint-action@v6
         with:
