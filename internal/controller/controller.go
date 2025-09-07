@@ -127,7 +127,7 @@ type Controller struct {
 	// docker short-ttl caches
 	cacheMu           sync.Mutex
 	svcCacheUntil     time.Time
-	cachedServices    []types.Service
+	cachedServices    []swarm.Service
 	nodeCacheUntil    time.Time
 	cachedNodes       []swarm.Node
 	// rate limiting for placeholder writes
@@ -1096,7 +1096,7 @@ func (c *Controller) ClaimsForNode(node string) []ClaimOut {
 	return result
 }
 
-func (c *Controller) serviceList() ([]types.Service, error) {
+func (c *Controller) serviceList() ([]swarm.Service, error) {
 	// short TTL cache (configurable; default 800ms)
 	ttl := 800 * time.Millisecond
 	if v := strings.TrimSpace(os.Getenv("VOLKIT_CACHE_TTL_MS")); v != "" {
@@ -1106,7 +1106,7 @@ func (c *Controller) serviceList() ([]types.Service, error) {
 	}
 	c.cacheMu.Lock()
 	if time.Now().Before(c.svcCacheUntil) && c.cachedServices != nil {
-		sv := make([]types.Service, len(c.cachedServices))
+		sv := make([]swarm.Service, len(c.cachedServices))
 		copy(sv, c.cachedServices)
 		c.cacheMu.Unlock()
 		return sv, nil
@@ -1124,7 +1124,7 @@ func (c *Controller) serviceList() ([]types.Service, error) {
 	if err != nil { c.metricsMu.Lock(); c.dockerApiErrors++; c.metricsMu.Unlock(); return nil, err }
 	c.cacheMu.Lock(); c.cachedServices = svcs; c.svcCacheUntil = time.Now().Add(ttl); c.cacheMu.Unlock()
 	// 客户端过滤：仅保留含 volkit.* 标签的服务
-	var out []types.Service
+	var out []swarm.Service
 	for _, s := range svcs {
 		lbl := s.Spec.Labels
 		if lbl == nil { continue }
@@ -2222,7 +2222,7 @@ func (c *Controller) updateLevelReadyLabels() {
 			if levelReq[lvl] == nil { levelReq[lvl] = map[string]struct{}{} }
 			levelReq[lvl][strings.Trim(cl.prefix, "/")] = struct{}{}
 			// register service once per level
-			if _, ok := func() bool { for _, r := range levelSvcs[lvl] { if r.id==s.ID { return true } }; return false }(); !ok {
+			if !func() bool { for _, r := range levelSvcs[lvl] { if r.id==s.ID { return true } }; return false }() {
 				levelSvcs[lvl] = append(levelSvcs[lvl], svcRef{id: s.ID, name: s.Spec.Name, level: lvl})
 			}
 		}
@@ -2266,7 +2266,7 @@ func (c *Controller) updateLevelReadyLabels() {
 			if spec.Annotations.Labels == nil { spec.Annotations.Labels = map[string]string{} }
 			if ready { spec.Annotations.Labels[labelKey] = "true" } else { delete(spec.Annotations.Labels, labelKey) }
 			uctx, ucancel := c.timeoutCtx(5 * time.Second)
-			_, _ = cli.NodeUpdate(uctx, targetID, inspect.Meta.Version, spec)
+			_ = cli.NodeUpdate(uctx, targetID, inspect.Meta.Version, spec)
 			ucancel()
 			// migrations: on lose readiness always; on regain readiness optionally (global or per-service label)
 			for _, ref := range levelSvcs[lvl] {
