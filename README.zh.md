@@ -190,6 +190,8 @@ services:
 | `VOLKIT_PROXY_REMOTE_SERVICE` | 远端 Service 名（可留空） | `minio-remote` |
 | `VOLKIT_PROXY_BACKEND_PORT` | 后端端口 | `9000` |
 | `VOLKIT_PROXY_HEALTH_PATH` | 健康检查路径 | `/minio/health/ready` |
+| `VOLKIT_PROXY_AUTO` | 启用 agent 侧“探测+评分”自适应 | `false` |
+| `VOLKIT_PROXY_AUTO_ALLOW_COORDINATOR` | 允许协调器也运行“探测+评分” | `false` |
 
 ### 节点本地 LB（唯一别名）
 | 变量 | 说明 | 默认 |

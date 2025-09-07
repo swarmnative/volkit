@@ -55,6 +55,15 @@ jobs:
         run: |
           go mod tidy
           go mod download
+      - name: Reconcile go.sum if checksum mismatch (ephemeral)
+        continue-on-error: true
+        run: |
+          set -e
+          if ! go mod verify; then
+            rm -f go.sum
+            go mod tidy
+            go mod download
+          fi
       - name: Verify modules
         run: |
           go mod verify

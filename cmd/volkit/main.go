@@ -795,7 +795,9 @@ func main() {
 	}
 
 	// Agent-side proxy auto mode: probe backends and adjust HAProxy via runtime API
-	if getenv("VOLKIT_MODE", "all") != "coordinator" && getenv("VOLKIT_PROXY_ENABLE", "false") == "true" && getenv("VOLKIT_PROXY_AUTO", "false") == "true" {
+	modeEff := strings.ToLower(strings.TrimSpace(getenv("VOLKIT_MODE", "all")))
+	allowAutoOnCoordinator := strings.EqualFold(strings.TrimSpace(getenv("VOLKIT_PROXY_AUTO_ALLOW_COORDINATOR", "false")), "true")
+	if ((modeEff != "coordinator") || allowAutoOnCoordinator) && getenv("VOLKIT_PROXY_ENABLE", "false") == "true" && getenv("VOLKIT_PROXY_AUTO", "false") == "true" {
 		go func() {
 			// config (hard-coded to reduce config surface)
 			probeURL := "/minio/health/ready"

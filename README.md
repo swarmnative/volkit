@@ -286,6 +286,8 @@ Aux endpoint: `/metrics/ready` emits only readiness counts.
 | `VOLKIT_PROXY_LOCAL_LB` | bool | no | `false` | Per-node alias mode |
 | `VOLKIT_PROXY_NETWORK` | string | when local LB | empty | Overlay network (attachable) |
 | `VOLKIT_PROXY_PORT` | int | when enabled | `8081` | HAProxy listen port |
+| `VOLKIT_PROXY_AUTO` | bool | no | `false` | Enable agent-side probing and scoring |
+| `VOLKIT_PROXY_AUTO_ALLOW_COORDINATOR` | bool | no | `false` | Allow coordinator to run scoring too |
 
 ### rclone image/update
 | Variable | Type | Required | Default | Description |
