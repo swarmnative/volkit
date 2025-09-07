@@ -1953,7 +1953,8 @@ func (c *Controller) Preflight() error {
 		&container.Config{Image: c.cfg.MounterImage, Cmd: []string{"sh", "-lc", "rclone version >/dev/null 2>&1"}},
 		&container.HostConfig{}, &network.NetworkingConfig{}, nil, c.helperName("rclone-check")); merr == nil {
 		_ = c.cli.ContainerStart(c.ctx, mcont.ID, container.StartOptions{})
-		st, _ := c.cli.ContainerWait(c.ctx, mcont.ID, container.WaitConditionNotRunning)
+		stCh, _ := c.cli.ContainerWait(c.ctx, mcont.ID, container.WaitConditionNotRunning)
+		st := <-stCh
 		if st.StatusCode != 0 {
 			errs = append(errs, "mounter image may not include rclone (set VOLKIT_RCLONE_IMAGE to a valid rclone image)")
 		}
@@ -2481,4 +2482,37 @@ func (c *Controller) computeMounterSpecHash(env []string, cmd []string) string {
 	for _, a := range cmd { b.WriteString(a); b.WriteByte('\n') }
 	sum := sha256.Sum256([]byte(b.String()))
 	return fmt.Sprintf("%x", sum[:])[:16]
+}
+
+// buildPresetArgs returns recommended rclone flags based on preset name.
+func (c *Controller) buildPresetArgs() []string {
+    preset := strings.ToLower(strings.TrimSpace(c.cfg.Preset))
+    switch preset {
+    case "small-files":
+        return []string{"--vfs-cache-mode=writes", "--vfs-cache-max-size=256M", "--vfs-cache-max-age=12h", "--dir-cache-time=1h", "--buffer-size=1M"}
+    case "balanced":
+        return []string{"--vfs-cache-mode=writes", "--vfs-cache-max-size=1G", "--vfs-cache-max-age=24h", "--dir-cache-time=12h", "--buffer-size=4M"}
+    case "throughput":
+        return []string{"--vfs-cache-mode=full", "--vfs-cache-max-size=4G", "--vfs-cache-max-age=48h", "--dir-cache-time=24h", "--buffer-size=8M"}
+    default:
+        return nil
+    }
+}
+
+// isSwarmLeader best-effort check whether current node is a Swarm manager leader.
+func (c *Controller) isSwarmLeader() bool {
+    ctx, cancel := c.timeoutCtx(2 * time.Second)
+    defer cancel()
+    info, err := c.cli.Info(ctx)
+    if err != nil { return false }
+    return strings.EqualFold(strings.TrimSpace(info.Swarm.ControlAvailable), "true") && strings.EqualFold(strings.TrimSpace(info.Swarm.Cluster.ID), strings.TrimSpace(info.Swarm.Cluster.ID))
+}
+
+// allowPlaceholder determines whether to create a control object for a given bucket/prefix.
+func (c *Controller) allowPlaceholder(bucket, prefix string) bool {
+    // honor allowlist if configured
+    re := strings.TrimSpace(c.cfg.ClaimAllowlistRegex)
+    if re == "" { return true }
+    if rx, err := regexp.Compile(re); err == nil { return rx.MatchString(strings.Trim(prefix, "/")) }
+    return false
 }
