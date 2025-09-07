@@ -1,0 +1,24 @@
+run:
+  timeout: 5m
+  go: '1.22'
+linters:
+  enable:
+    - govet
+    - staticcheck
+    - errcheck
+    - ineffassign
+    - gosimple
+    - typecheck
+    - unused
+    - revive
+    - gocritic
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - errcheck
+        - revive
+

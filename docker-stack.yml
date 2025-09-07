@@ -1,0 +1,69 @@
+version: "3.8"
+
+# stack: volkit
+#          以全局模式部署 volkit，实现基于 S3 的“类 K8s Volume”体验：
+
+networks:
+  internal_net:
+    driver: overlay
+    internal: true
+
+secrets:
+  s3_access_key:
+    external: true
+  s3_secret_key:
+    external: true
+
+services:
+  volkit:
+    image: ghcr.io/swarmnative/volkit:latest
+    networks: [internal_net]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - type: bind
+        source: /mnt/s3
+        target: /mnt/s3
+        bind:
+          propagation: rshared
+    secrets:
+      - s3_access_key
+      - s3_secret_key
+    environment:
+      - VOLKIT_ENDPOINT=http://s3.local:9000
+      - VOLKIT_PROVIDER=
+      - VOLKIT_RCLONE_REMOTE=S3:your-bucket
+      - VOLKIT_RCLONE_ARGS=--vfs-cache-mode=writes --dir-cache-time=12h
+      - VOLKIT_MOUNTPOINT=/mnt/s3
+      - VOLKIT_ACCESS_KEY_FILE=/run/secrets/s3_access_key
+      - VOLKIT_SECRET_KEY_FILE=/run/secrets/s3_secret_key
+      - VOLKIT_PROXY_ENABLE=false
+      - VOLKIT_NSENTER_HELPER_IMAGE=ghcr.io/swarmnative/volkit:latest
+    deploy:
+      mode: global
+      placement:
+        constraints:
+          - node.labels.s3-mounter == true
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 256M
+        reservations:
+          cpus: '0.10'
+          memory: 64M
+      restart_policy:
+        condition: any
+      update_config:
+        order: start-first
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - NET_RAW
+    read_only: true
+    tmpfs:
+      - /tmp
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://localhost:8080/ready || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+

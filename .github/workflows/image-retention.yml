@@ -1,0 +1,179 @@
+name: image-retention
+
+on:
+  schedule:
+    - cron: '17 2 * * *' # daily
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  OWNER: ${{ github.repository_owner }}
+  OWNER_TYPE: ${{ github.event.repository.owner.type }} # 'Organization' or 'User'
+  PACKAGE: volkit
+  RETENTION_DAYS: '30'
+  FP_RETENTION_DAYS: '14'
+  UNTAGGED_DAYS: '7'
+  KEEP_TAG_RE: '^v\d+\.\d+\.\d+$|^latest$|^main$|^nightly$|^stable$'
+  DRY_RUN: 'false' # set 'true' to preview without deleting
+
+jobs:
+  prune-ghcr:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show policy
+        run: |
+          echo "Owner: $OWNER ($OWNER_TYPE), Package: $PACKAGE"
+          echo "Keep regex: $KEEP_TAG_RE"
+          echo "Retention: $RETENTION_DAYS d, fp: $FP_RETENTION_DAYS d, untagged: $UNTAGGED_DAYS d"
+          echo "Dry run: $DRY_RUN"
+
+      - name: Prune GHCR container versions
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          api_list() {
+            local page=$1
+            local base
+            if [[ "${OWNER_TYPE}" == "Organization" ]]; then base="/orgs/${OWNER}"; else base="/users/${OWNER}"; fi
+            gh api -H "Accept: application/vnd.github+json" \
+              "${base}/packages/container/${PACKAGE}/versions?per_page=100&page=${page}"
+          }
+
+          now=$(date -u +%s)
+          deleted=0
+          page=1
+          while :; do
+            data=$(api_list "$page")
+            count=$(jq 'length' <<<"$data")
+            [[ "$count" == "0" ]] && break
+
+            while IFS=$'\t' read -r id updated tags; do
+              # age in days
+              ts=$(date -u -d "$updated" +%s || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$updated" +%s)
+              age=$(( (now - ts) / 86400 ))
+
+              IFS=',' read -r -a arr <<<"${tags}"
+              protected=false
+              has_fp=false
+              has_tag=false
+              for t in "${arr[@]}"; do
+                [[ -n "${t}" ]] && has_tag=true || true
+                if [[ "$t" =~ $KEEP_TAG_RE ]]; then protected=true; fi
+                if [[ "$t" =~ ^fp- ]]; then has_fp=true; fi
+              done
+
+              # Decide ttl
+              ttl=$RETENTION_DAYS
+              if [[ "$has_fp" == true ]]; then ttl=$FP_RETENTION_DAYS; fi
+              if [[ "$has_tag" == false ]]; then ttl=$UNTAGGED_DAYS; fi
+
+              if [[ "$protected" == true ]] || [[ "$age" -lt "$ttl" ]]; then
+                continue
+              fi
+
+              echo "Deleting version id=$id age=${age}d tags=[${tags}] ttl=${ttl}d"
+              if [[ "$DRY_RUN" != "true" ]]; then
+                gh api -X DELETE \
+                  -H "Accept: application/vnd.github+json" \
+                  "/orgs/${ORG}/packages/container/${PACKAGE}/versions/${id}" || true
+              fi
+              deleted=$((deleted+1))
+            done < <(jq -r '.[] | [.id, .updated_at, (.metadata.container.tags | join(","))] | @tsv' <<<"$data")
+
+            page=$((page+1))
+          done
+
+          echo "Deleted versions: $deleted"
+
+  prune-dockerhub:
+    runs-on: ubuntu-latest
+    env:
+      DH_NAMESPACE: ${{ secrets.DOCKERHUB_NAMESPACE }}
+      DH_REPO: volkit
+      DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+      DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+    steps:
+      - name: Check Docker Hub secrets
+        run: |
+          if [[ -z "${DOCKERHUB_USERNAME:-}" || -z "${DOCKERHUB_TOKEN:-}" ]]; then
+            echo "Missing DOCKERHUB_USERNAME or DOCKERHUB_TOKEN" >&2; exit 1;
+          fi
+      - name: Show policy (Docker Hub)
+        run: |
+          echo "Docker Hub: ${DH_NAMESPACE}/${DH_REPO}"
+          echo "Keep regex: $KEEP_TAG_RE"
+          echo "Retention: $RETENTION_DAYS d, fp: $FP_RETENTION_DAYS d"
+          echo "Dry run: $DRY_RUN"
+
+      - name: Prune Docker Hub tags
+        shell: bash
+        env:
+          DH_USER: ${{ env.DOCKERHUB_USERNAME }}
+          DH_TOKEN: ${{ env.DOCKERHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          apt-get update >/dev/null 2>&1 || true
+          apt-get install -y jq >/dev/null 2>&1 || true
+
+          if [[ -z "${DH_USER:-}" || -z "${DH_TOKEN:-}" ]]; then
+            echo "Docker Hub credentials not provided. Skipping."; exit 0;
+          fi
+
+          jwt=$(curl -fsSL -H 'Content-Type: application/json' \
+            -d "{\"username\":\"${DH_USER}\",\"password\":\"${DH_TOKEN}\"}" \
+            https://hub.docker.com/v2/users/login/ | jq -r .token)
+          if [[ -z "$jwt" || "$jwt" == "null" ]]; then
+            echo "Docker Hub login failed" >&2; exit 1;
+          fi
+
+          ns="${DH_NAMESPACE:-}"
+          # 默认使用 swarmnative 作为 Docker Hub 命名空间；如需覆盖请设置 DOCKERHUB_NAMESPACE Secret
+          if [[ -z "$ns" ]]; then ns="swarmnative"; fi
+          echo "Resolved Docker Hub namespace: $ns"
+
+          now=$(date -u +%s)
+          deleted=0
+          page=1
+          while :; do
+            url="https://hub.docker.com/v2/repositories/${ns}/${DH_REPO}/tags/?page_size=100&page=${page}"
+            http=$(curl -s -o /tmp/dh.json -w "%{http_code}" -H "Authorization: JWT ${jwt}" "$url" || true)
+            if [[ "$http" == "404" ]]; then
+              echo "Docker Hub repo not found: ${ns}/${DH_REPO}" >&2; exit 0;
+            fi
+            if [[ "$http" != "200" ]]; then
+              echo "Docker Hub API error HTTP $http for $url" >&2; exit 1;
+            fi
+            data=$(cat /tmp/dh.json)
+            count=$(jq '.results | length' <<<"$data")
+            [[ "$count" == "0" ]] && break
+
+            while IFS=$'\t' read -r name updated; do
+              # protect by regex
+              if [[ "$name" =~ $KEEP_TAG_RE ]]; then continue; fi
+
+              ts=$(date -u -d "$updated" +%s || date -u -jf "%Y-%m-%dT%H:%M:%SZ" "$updated" +%s)
+              age=$(( (now - ts) / 86400 ))
+              ttl=$RETENTION_DAYS
+              if [[ "$name" =~ ^fp- ]]; then ttl=$FP_RETENTION_DAYS; fi
+
+              if [[ "$age" -lt "$ttl" ]]; then continue; fi
+
+              echo "Deleting Docker Hub tag: ${name} (age=${age}d ttl=${ttl}d)"
+              if [[ "$DRY_RUN" != "true" ]]; then
+                curl -fsSL -X DELETE -H "Authorization: JWT ${jwt}" \
+                  "https://hub.docker.com/v2/repositories/${DH_NAMESPACE}/${DH_REPO}/tags/${name}/" >/dev/null || true
+              fi
+              deleted=$((deleted+1))
+            done < <(jq -r '.results[] | [.name, .last_updated] | @tsv' <<<"$data")
+
+            page=$((page+1))
+          done
+
+          echo "Deleted Docker Hub tags: $deleted"
+

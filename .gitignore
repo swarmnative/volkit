@@ -1,0 +1,21 @@
+# Build
+/bin/
+/dist/
+/build/
+*.out
+
+# Go
+coverage*
+*.coverprofile
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+

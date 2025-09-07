@@ -1,0 +1,21 @@
+# syntax=docker/dockerfile:1.7
+
+ARG RCLONE_TAG=1.67.0
+
+FROM rclone/rclone:${RCLONE_TAG}
+LABEL org.opencontainers.image.source="https://github.com/swarmnative/volkit"
+LABEL org.opencontainers.image.title="volkit-rclone"
+LABEL org.opencontainers.image.description="rclone with user_allow_other enabled for non-root access"
+LABEL org.opencontainers.image.licenses="MIT"
+
+# enable allow_other
+USER root
+RUN set -eux; \
+    if [ -f /etc/os-release ] && grep -qi alpine /etc/os-release; then \
+      echo user_allow_other > /etc/fuse.conf && apk add --no-cache ca-certificates; \
+    else \
+      echo user_allow_other > /etc/fuse.conf; \
+    fi
+
+# keep default rclone entrypoint/cmd; this image is used by volkit as mounter
+
