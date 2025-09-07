@@ -2222,7 +2222,7 @@ func (c *Controller) updateLevelReadyLabels() {
 			if levelReq[lvl] == nil { levelReq[lvl] = map[string]struct{}{} }
 			levelReq[lvl][strings.Trim(cl.prefix, "/")] = struct{}{}
 			// register service once per level
-			if _, ok := func() (bool) { for _, r := range levelSvcs[lvl] { if r.id==s.ID { return true } } ; return false }(); !ok {
+			if _, ok := func() bool { for _, r := range levelSvcs[lvl] { if r.id==s.ID { return true } }; return false }(); !ok {
 				levelSvcs[lvl] = append(levelSvcs[lvl], svcRef{id: s.ID, name: s.Spec.Name, level: lvl})
 			}
 		}
@@ -2259,14 +2259,14 @@ func (c *Controller) updateLevelReadyLabels() {
 			for _, n := range c.cachedNodes { name := strings.TrimSpace(n.Description.Hostname); if name == "" { name = n.ID }; if name == node { targetID = n.ID; break } }
 			if targetID == "" { continue }
 			nctx, ncancel := c.timeoutCtx(5 * time.Second)
-			inspect, err := cli.NodeInspectWithRaw(nctx, targetID)
+			inspect, _, err := cli.NodeInspectWithRaw(nctx, targetID)
 			ncancel()
 			if err != nil { continue }
 			spec := inspect.Spec
 			if spec.Annotations.Labels == nil { spec.Annotations.Labels = map[string]string{} }
 			if ready { spec.Annotations.Labels[labelKey] = "true" } else { delete(spec.Annotations.Labels, labelKey) }
 			uctx, ucancel := c.timeoutCtx(5 * time.Second)
-			_ = cli.NodeUpdate(uctx, targetID, inspect.Meta.Version, spec)
+			_, _ = cli.NodeUpdate(uctx, targetID, inspect.Meta.Version, spec)
 			ucancel()
 			// migrations: on lose readiness always; on regain readiness optionally (global or per-service label)
 			for _, ref := range levelSvcs[lvl] {
@@ -2286,7 +2286,7 @@ func (c *Controller) updateLevelReadyLabels() {
 					c.migMu.Unlock()
 					if now > 0 && err == nil {
 						sp := s.Spec; sp.TaskTemplate.ForceUpdate++
-						_ = cli.ServiceUpdate(sctx, s.ID, s.Meta.Version, sp, types.ServiceUpdateOptions{})
+						_, _ = cli.ServiceUpdate(sctx, s.ID, s.Meta.Version, sp, types.ServiceUpdateOptions{})
 					}
 					scancel()
 					continue
@@ -2299,7 +2299,7 @@ func (c *Controller) updateLevelReadyLabels() {
 					sctx, scancel := c.timeoutCtx(6 * time.Second)
 					if s, _, err := cli.ServiceInspectWithRaw(sctx, ref.id, types.ServiceInspectOptions{}); err == nil {
 						sp := s.Spec; sp.TaskTemplate.ForceUpdate++
-						_ = cli.ServiceUpdate(sctx, s.ID, s.Meta.Version, sp, types.ServiceUpdateOptions{})
+						_, _ = cli.ServiceUpdate(sctx, s.ID, s.Meta.Version, sp, types.ServiceUpdateOptions{})
 					}
 					scancel()
 				}
@@ -2342,7 +2342,7 @@ func (c *Controller) maybeUnblockServices() {
             spec := current.Spec
             if spec.TaskTemplate.Placement == nil { spec.TaskTemplate.Placement = &swarm.Placement{} }
             spec.TaskTemplate.Placement.Constraints = out
-            _ = cli.ServiceUpdate(sctx, current.ID, current.Meta.Version, spec, types.ServiceUpdateOptions{})
+            _, _ = cli.ServiceUpdate(sctx, current.ID, current.Meta.Version, spec, types.ServiceUpdateOptions{})
             c.metricsMu.Lock(); c.servicesUnblockedTotal++; c.metricsMu.Unlock()
         }
         scancel()
@@ -2505,7 +2505,8 @@ func (c *Controller) isSwarmLeader() bool {
     defer cancel()
     info, err := c.cli.Info(ctx)
     if err != nil { return false }
-    return strings.EqualFold(strings.TrimSpace(info.Swarm.ControlAvailable), "true") && strings.EqualFold(strings.TrimSpace(info.Swarm.Cluster.ID), strings.TrimSpace(info.Swarm.Cluster.ID))
+    // best-effort: treat manager with ControlAvailable=true as leader-capable
+    return info.Swarm.ControlAvailable
 }
 
 // allowPlaceholder determines whether to create a control object for a given bucket/prefix.
