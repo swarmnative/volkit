@@ -1,8 +1,6 @@
 package httpserver
 
 import (
-    "bufio"
-    "bytes"
     "compress/gzip"
     "context"
     "crypto/rand"
@@ -16,7 +14,6 @@ import (
     "io"
     "log/slog"
     "math/big"
-    "net"
     "net/http"
     "net/url"
     "os"

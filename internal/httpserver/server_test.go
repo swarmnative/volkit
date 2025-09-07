@@ -43,7 +43,7 @@ func TestClaimsETag(t *testing.T) {
     rr := httptest.NewRecorder()
     req := httptest.NewRequest(http.MethodGet, "/claims?node=n1", nil)
     // simulate TLS by setting a non-nil TLS field to pass authOK when AUTH_DISABLE=false
-    req.TLS = &struct{}{}
+    req.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr, req)
     if rr.Code != http.StatusOK { t.Fatalf("status=%d", rr.Code) }
     etag := strings.TrimSpace(rr.Header().Get("ETag"))
@@ -51,7 +51,7 @@ func TestClaimsETag(t *testing.T) {
     rr2 := httptest.NewRecorder()
     req2 := httptest.NewRequest(http.MethodGet, "/claims?node=n1", nil)
     req2.Header.Set("If-None-Match", etag)
-    req2.TLS = &struct{}{}
+    req2.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr2, req2)
     if rr2.Code != http.StatusNotModified { t.Fatalf("etag not honored: %d", rr2.Code) }
 }
@@ -78,7 +78,7 @@ func TestCredsStaticFallback(t *testing.T) {
     mux, _ := BuildMux(Options{Ctrl: &fakeCtrl{}, Cfg: controller.Config{}})
     rr := httptest.NewRecorder()
     req := httptest.NewRequest(http.MethodGet, "/creds?level=default", nil)
-    req.TLS = &struct{}{}
+    req.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr, req)
     if rr.Code != http.StatusOK { t.Fatalf("/creds status=%d", rr.Code) }
     var m map[string]any
@@ -102,7 +102,7 @@ func TestCredsS3AdminForceStatic(t *testing.T) {
     mux, _ := BuildMux(Options{Ctrl: &fakeCtrl{}, Cfg: controller.Config{}})
     rr := httptest.NewRecorder()
     req := httptest.NewRequest(http.MethodGet, "/creds?level=default", nil)
-    req.TLS = &struct{}{}
+    req.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr, req)
     if rr.Code != http.StatusOK { t.Fatalf("/creds status=%d", rr.Code) }
     var resp struct{ Issuer string `json:"issuer"`; RcloneEnv []string `json:"rcloneEnv"` }
@@ -118,7 +118,7 @@ func TestHintsTimeoutNoChange(t *testing.T) {
     mux, _ := BuildMux(Options{Ctrl: &fakeCtrl{}, Cfg: controller.Config{}})
     rr := httptest.NewRecorder()
     req := httptest.NewRequest(http.MethodGet, "/hints?since=999999999999&timeoutSec=0", nil)
-    req.TLS = &struct{}{}
+    req.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr, req)
     if rr.Code != http.StatusNoContent && rr.Code != http.StatusOK { t.Fatalf("/hints code=%d", rr.Code) }
 }
@@ -236,7 +236,7 @@ func TestMaintenanceAuthMatrix(t *testing.T) {
     // With TLS -> accepted
     rr2 := httptest.NewRecorder()
     req2 := httptest.NewRequest(http.MethodGet, "/maintenance/recompute", nil)
-    req2.TLS = &struct{}{}
+    req2.TLS = &tls.ConnectionState{}
     mux.ServeHTTP(rr2, req2)
     if rr2.Code != http.StatusAccepted { t.Fatalf("expected 202, got %d", rr2.Code) }
     // AUTH_DISABLE=false and no TLS -> unauthorized
@@ -269,7 +269,7 @@ func TestAgentStatus_MethodAndAuth(t *testing.T) {
 	// AUTH_DISABLE=true with TLS -> 202
 	rr4 := httptest.NewRecorder()
 	req4 := httptest.NewRequest(http.MethodPost, "/agent/status", strings.NewReader(`{"nodeId":"n1","ts":1}`))
-	req4.TLS = &struct{}{}
+	req4.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr4, req4)
 	if rr4.Code != http.StatusAccepted { t.Fatalf("expected 202, got %d", rr4.Code) }
 }
@@ -283,13 +283,13 @@ func TestAgentStatus_RateLimit(t *testing.T) {
 	// first ok
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "/agent/status", strings.NewReader(`{"nodeId":"n1","ts":1}`))
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusAccepted { t.Fatalf("expected 202, got %d", rr1.Code) }
 	// immediate second should be 429
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/agent/status", strings.NewReader(`{"nodeId":"n1","ts":2}`))
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests { t.Fatalf("expected 429, got %d", rr2.Code) }
 }
@@ -303,13 +303,13 @@ func TestMaintenance_Recompute_RateLimit(t *testing.T) {
 	// first ok (with TLS required for sensitive endpoint when AUTH_DISABLE=true)
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodGet, "/maintenance/recompute", nil)
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusAccepted { t.Fatalf("expected 202, got %d", rr1.Code) }
 	// second should be 429
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/maintenance/recompute", nil)
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests { t.Fatalf("expected 429, got %d", rr2.Code) }
 }
@@ -318,7 +318,7 @@ func TestHintsImmediateChange(t *testing.T) {
 	mux, _ := BuildMux(Options{Ctrl: &fakeCtrl{}, Cfg: controller.Config{}})
 	rr := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/hints?since=0&timeoutSec=30", nil)
-	req.TLS = &struct{}{}
+	req.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK { t.Fatalf("/hints expected 200, got %d", rr.Code) }
 }
@@ -333,7 +333,7 @@ func TestMetricsReady_AuthMatrix(t *testing.T) {
 	// TLS present -> 200
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/metrics/ready", nil)
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusOK { t.Fatalf("/metrics/ready expected 200, got %d", rr2.Code) }
 }
@@ -348,14 +348,14 @@ func TestPKIEnroll_RateLimit(t *testing.T) {
 	// first POST with TLS and token -> processes and returns 400 (bad csr) but passes RL
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "/pki/enroll", strings.NewReader("bad"))
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	req1.Header.Set("X-Volkit-Token", "tok")
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusBadRequest && rr1.Code != http.StatusCreated { t.Fatalf("/pki/enroll first expected 400/201, got %d", rr1.Code) }
 	// immediate second -> rate limited 429
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/pki/enroll", strings.NewReader("bad"))
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	req2.Header.Set("X-Volkit-Token", "tok")
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests { t.Fatalf("/pki/enroll expected 429, got %d", rr2.Code) }
@@ -400,7 +400,7 @@ func TestCreds_ExternalIssuer_ETag304(t *testing.T) {
 	// First request should get 200 and ETag
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodGet, "/creds?level=default", nil)
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusOK { t.Fatalf("first creds expected 200, got %d", rr1.Code) }
 	et := strings.TrimSpace(rr1.Header().Get("ETag"))
@@ -409,7 +409,7 @@ func TestCreds_ExternalIssuer_ETag304(t *testing.T) {
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodGet, "/creds?level=default", nil)
 	req2.Header.Set("If-None-Match", et)
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusNotModified { t.Fatalf("expected 304, got %d", rr2.Code) }
 }
@@ -459,13 +459,13 @@ func TestAgentStatus_RateLimit_RetryAfterHeader(t *testing.T) {
 	// first accepted
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "/agent/status", strings.NewReader(`{"nodeId":"n1","ts":1}`))
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusAccepted { t.Fatalf("expected 202, got %d", rr1.Code) }
 	// second limited -> 429 with Retry-After
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/agent/status", strings.NewReader(`{"nodeId":"n1","ts":2}`))
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests { t.Fatalf("expected 429, got %d", rr2.Code) }
 	if v := strings.TrimSpace(rr2.Header().Get("Retry-After")); v == "" { t.Fatalf("missing Retry-After header") }
@@ -481,14 +481,14 @@ func TestPKIEnroll_RateLimit_RetryAfterHeader(t *testing.T) {
 	// first request (bad csr) but passes RL
 	rr1 := httptest.NewRecorder()
 	req1 := httptest.NewRequest(http.MethodPost, "/pki/enroll", strings.NewReader("bad"))
-	req1.TLS = &struct{}{}
+	req1.TLS = &tls.ConnectionState{}
 	req1.Header.Set("X-Volkit-Token", "tok")
 	mux.ServeHTTP(rr1, req1)
 	if rr1.Code != http.StatusBadRequest && rr1.Code != http.StatusCreated { t.Fatalf("expected 400/201, got %d", rr1.Code) }
 	// second limited -> 429 with Retry-After
 	rr2 := httptest.NewRecorder()
 	req2 := httptest.NewRequest(http.MethodPost, "/pki/enroll", strings.NewReader("bad"))
-	req2.TLS = &struct{}{}
+	req2.TLS = &tls.ConnectionState{}
 	req2.Header.Set("X-Volkit-Token", "tok")
 	mux.ServeHTTP(rr2, req2)
 	if rr2.Code != http.StatusTooManyRequests { t.Fatalf("expected 429, got %d", rr2.Code) }
