@@ -259,7 +259,7 @@ jobs:
 
       - name: Build and Push rclone (GHCR)
         if: steps.decide_rclone.outputs.changed == 'true'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         id: build_rclone
         with:
           context: ${{ steps.ctx_rclone.outputs.ctx }}
@@ -343,7 +343,7 @@ jobs:
 
       - name: Build and Push volkit (GHCR)
         if: steps.decide_vs3.outputs.changed == 'true'
-        uses: docker/build-push-action@v5
+        uses: docker/build-push-action@v6
         id: build_vs3
         with:
           context: .
