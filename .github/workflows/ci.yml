@@ -17,21 +17,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+          cache: true
+          cache-dependency-path: '**/go.sum'
 
       - name: Configure Go proxy & sumdb
         run: |
           go env -w GOPROXY=https://proxy.golang.org,direct
           go env -w GOSUMDB=sum.golang.org
-
-      - name: Modules cache
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/go/pkg/mod
-            ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
-          restore-keys: |
-            ${{ runner.os }}-go-
 
       - name: Clean and sync modules
         run: |
@@ -39,31 +31,37 @@ jobs:
           go mod download
           go mod verify
           go mod tidy -v
-
-      - name: Build (show many errors)
-        run: go build -gcflags=all=-e ./...
         continue-on-error: true
 
-      - name: Vet
-        run: go vet ./...
-        continue-on-error: true
+      - name: Aggregate checks and fail at end
+        run: |
+          set +e
+          fails=0
+          echo '== go build (show many errors) =='
+          go build -gcflags=all=-e ./...
+          fb=$?
+          echo "go build exit=$fb"; fails=$((fails+fb))
 
-      - name: Install staticcheck
-        run: go install honnef.co/go/tools/cmd/staticcheck@latest
+          echo '== go vet =='
+          go vet ./...
+          fv=$?
+          echo "go vet exit=$fv"; fails=$((fails+fv))
 
-      - name: Staticcheck
-        run: $HOME/go/bin/staticcheck ./...
-        continue-on-error: true
+          echo '== staticcheck =='
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+          $(go env GOPATH)/bin/staticcheck ./...
+          fs=$?
+          echo "staticcheck exit=$fs"; fails=$((fails+fs))
 
-      - name: golangci-lint
-        uses: golangci/golangci-lint-action@v6
-        with:
-          version: latest
-          args: --timeout=5m --out-format=github-actions
-        continue-on-error: true
+          echo '== golangci-lint =='
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          $(go env GOPATH)/bin/golangci-lint run --timeout=5m --out-format=github-actions
+          fg=$?
+          echo "golangci-lint exit=$fg"; fails=$((fails+fg))
 
-      - name: Summarize and fail if any step failed
-        if: ${{ failure() }}
-        run: exit 1
+          if [ $fails -ne 0 ]; then
+            echo "::error::One or more checks failed (aggregate=$fails)"
+            exit 1
+          fi
 
 
