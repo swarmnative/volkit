@@ -9,6 +9,9 @@ on:
 jobs:
   build-and-lint:
     runs-on: ubuntu-latest
+    env:
+      GOSUMDB: off
+      GOPROXY: https://proxy.golang.org,direct
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -20,10 +23,9 @@ jobs:
           cache: true
           cache-dependency-path: '**/go.sum'
 
-      - name: Configure Go proxy & sumdb
+      - name: Configure Go proxy
         run: |
-          go env -w GOPROXY=https://proxy.golang.org,direct
-          go env -w GOSUMDB=sum.golang.org
+          go env -w GOPROXY=${GOPROXY}
 
       - name: Clean and sync modules
         run: |
