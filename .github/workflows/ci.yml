@@ -18,6 +18,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Configure Go proxy & sumdb
+        run: |
+          go env -w GOPROXY=https://proxy.golang.org,direct
+          go env -w GOSUMDB=sum.golang.org
+
       - name: Modules cache
         uses: actions/cache@v4
         with:
@@ -27,6 +32,13 @@ jobs:
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-go-
+
+      - name: Clean and sync modules
+        run: |
+          go clean -modcache
+          go mod download
+          go mod verify
+          go mod tidy -v
 
       - name: Build (show many errors)
         run: go build -gcflags=all=-e ./...
