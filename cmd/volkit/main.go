@@ -668,9 +668,9 @@ func main() {
 								} else {
 									for _, b2 := range backends { fmt.Fprintf(w, "enable server be_minio/%s\nset server be_minio/%s weight %d\n", b2, b2, 5) }
 								}
-							w.Flush()
-							_ = conn.Close()
-						}
+							}
+						w.Flush()
+						_ = conn.Close()
 					}
 					lastMode = mode
 					lastChange = time.Now()
