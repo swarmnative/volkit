@@ -1,3 +1,4 @@
+// Package pki holds a simple in-process CA material for development.
 package pki
 
 import (

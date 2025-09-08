@@ -30,9 +30,6 @@ LABEL org.opencontainers.image.licenses="MIT"
 WORKDIR /
 COPY --from=build /out/volkit /usr/local/bin/volkit
 
-# Prepare default mountpoint
-RUN ["/busybox/sh","-lc","mkdir -p /mnt/s3 || true"]
-
 USER nonroot:nonroot
 ENTRYPOINT ["/usr/local/bin/volkit"]
 # syntax=docker/dockerfile:1.7

@@ -1,3 +1,4 @@
+// Package issuer provides S3 credential issuing helpers.
 package issuer
 
 import (
@@ -16,7 +17,7 @@ import (
 
 // Credentials represents temporary STS credentials.
 type Credentials struct {
-    AccessKeyId     string
+    AccessKeyID     string
     SecretAccessKey string
     SessionToken    string
     Expiration      time.Time
@@ -26,7 +27,7 @@ type assumeRoleResponse struct {
     XMLName xml.Name `xml:"AssumeRoleResponse"`
     Result  struct {
         Credentials struct {
-            AccessKeyId     string    `xml:"AccessKeyId"`
+            AccessKeyID     string    `xml:"AccessKeyId"`
             SecretAccessKey string    `xml:"SecretAccessKey"`
             SessionToken    string    `xml:"SessionToken"`
             Expiration      string    `xml:"Expiration"`
@@ -63,13 +64,13 @@ func AssumeRoleSTS(endpoint, ak, sk string, durationSec int, region string, inse
     if insecure && client.Transport == nil { client.Transport = &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}} }
     resp, err := client.Do(req)
     if err != nil { return out, err }
-    defer resp.Body.Close()
+    defer func() { _ = resp.Body.Close() }()
     if resp.StatusCode/100 != 2 { return out, fmt.Errorf("sts http %d", resp.StatusCode) }
     var ar assumeRoleResponse
     if err := xml.NewDecoder(resp.Body).Decode(&ar); err != nil { return out, err }
     exp, _ := time.Parse(time.RFC3339, strings.TrimSpace(ar.Result.Credentials.Expiration))
     out = Credentials{
-        AccessKeyId:     strings.TrimSpace(ar.Result.Credentials.AccessKeyId),
+        AccessKeyID:     strings.TrimSpace(ar.Result.Credentials.AccessKeyID),
         SecretAccessKey: strings.TrimSpace(ar.Result.Credentials.SecretAccessKey),
         SessionToken:    strings.TrimSpace(ar.Result.Credentials.SessionToken),
         Expiration:      exp,

@@ -1,3 +1,4 @@
+// Package controller implements the core reconciliation and agent/coordinator logic for volkit.
 package controller
 
 import (
@@ -35,6 +36,7 @@ import (
 	"github.com/docker/docker/client"
 )
 
+// Config holds runtime configuration for the controller/agent.
 type Config struct {
 	MinioEndpointsCSV   string
 	S3Provider          string
@@ -93,6 +95,7 @@ type Config struct {
 	NodeLevel           string
 }
 
+// Controller encapsulates reconciliation logic and agent/coordinator duties.
 type Controller struct {
 	ctx           context.Context
 	cli           *client.Client
@@ -147,7 +150,7 @@ type Controller struct {
 	lastClaimsComputeMs   int64
 	lastServiceListMs     int64
 	lastNodeListMs        int64
-	dockerApiErrors       int64
+	dockerAPIErrors       int64
 	// dependency graph and affected nodes
 	depMu          sync.Mutex
 	svcToNodes     map[string][]string
@@ -442,9 +445,10 @@ func (c *Controller) reconcile() error {
 	}
 
 	// Auto-pull mounter image according to mode
-	if strings.TrimSpace(c.cfg.MounterUpdateMode) == "never" {
+	switch strings.TrimSpace(c.cfg.MounterUpdateMode) {
+	case "never":
 		// no-op
-	} else {
+	default:
 		if err := c.pullMounterImageIfChanged(); err != nil {
 			slog.Warn("pull mounter image (on_change)", "error", err)
 		}
@@ -501,7 +505,7 @@ func (c *Controller) ensureImagePresent(img string) error {
 		cancel()
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	_, _ = io.Copy(io.Discard, rc)
 	cancel()
 	// verify
@@ -702,7 +706,7 @@ func (c *Controller) ensureMounter() error {
 	if err != nil {
 		c.mounterFailCount++
 		// simple exponential backoff up to 2 minutes
-		wait := time.Duration(1<<min(c.mounterFailCount, 7)) * time.Second
+		wait := time.Duration(1<<min2(c.mounterFailCount, 7)) * time.Second
 		until := time.Now().Add(wait)
 		c.mounterBackoffUntil = until
 		c.metricsMu.Lock(); c.mounterBackoffTotal++; c.metricsMu.Unlock()
@@ -712,7 +716,7 @@ func (c *Controller) ensureMounter() error {
 	if err := c.cli.ContainerStart(sctx2, resp.ID, container.StartOptions{}); err != nil {
 		scancel2()
 		c.mounterFailCount++
-		wait := time.Duration(1<<min(c.mounterFailCount, 7)) * time.Second
+		wait := time.Duration(1<<min2(c.mounterFailCount, 7)) * time.Second
 		c.mounterBackoffUntil = time.Now().Add(wait)
 		c.metricsMu.Lock(); c.mounterBackoffTotal++; c.metricsMu.Unlock()
 		return fmt.Errorf("start mounter: %w", err)
@@ -725,7 +729,8 @@ func (c *Controller) ensureMounter() error {
 	return nil
 }
 
-func min(a, b int) int { if a < b { return a }; return b }
+// min2 returns the smaller of a and b. Named to avoid shadowing built-in names.
+func min2(a, b int) int { if a < b { return a }; return b }
 
 // isMounted checks whether a path is currently a mountpoint (best-effort by reading /proc/self/mountinfo)
 func isMounted(path string) bool {
@@ -763,7 +768,7 @@ func (c *Controller) unmountIfMounted() error {
 	case err := <-errCh:
 		if err != nil {
 			if rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "40"}); lgErr == nil {
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				b, _ := io.ReadAll(io.LimitReader(rc, 64*1024))
 				slog.Warn("preunmount helper failed", "error", err, "logs", string(b))
 			}
@@ -785,7 +790,7 @@ func (c *Controller) pullMounterImageIfDue() error {
 		icancel()
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	_, _ = io.Copy(io.Discard, rc)
 	c.lastImagePull = time.Now()
 	if ii, _, err := c.cli.ImageInspectWithRaw(ictx, c.cfg.MounterImage); err == nil {
@@ -805,7 +810,7 @@ func (c *Controller) pullMounterImageIfChanged() error {
 		ipcancel()
 		return err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	_, _ = io.Copy(io.Discard, rc)
 	c.lastImagePull = time.Now()
 	// Inspect new id
@@ -860,7 +865,7 @@ func (c *Controller) ensureRShared() error {
 		// capture logs best-effort
 		if err != nil {
 			if rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "40"}); lgErr == nil {
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				b, _ := io.ReadAll(io.LimitReader(rc, 64*1024))
 				slog.Warn("rshared helper failed", "error", err, "logs", string(b))
 			}
@@ -901,7 +906,7 @@ func (c *Controller) checkAndHealMount() error {
 	case err := <-errCh:
 		if err != nil {
 			if rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "80"}); lgErr == nil {
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				b, _ := io.ReadAll(io.LimitReader(rc, 64*1024))
 				slog.Warn("umount helper failed", "error", err, "logs", string(b))
 			}
@@ -1121,7 +1126,7 @@ func (c *Controller) serviceList() ([]swarm.Service, error) {
 	dur := time.Since(start).Milliseconds()
 	c.metricsMu.Lock(); c.lastServiceListMs = dur; c.metricsMu.Unlock()
 	c.observeSvcDur(int(dur))
-	if err != nil { c.metricsMu.Lock(); c.dockerApiErrors++; c.metricsMu.Unlock(); return nil, err }
+	if err != nil { c.metricsMu.Lock(); c.dockerAPIErrors++; c.metricsMu.Unlock(); return nil, err }
 	c.cacheMu.Lock(); c.cachedServices = svcs; c.svcCacheUntil = time.Now().Add(ttl); c.cacheMu.Unlock()
 	// 客户端过滤：仅保留含 volkit.* 标签的服务
 	var out []swarm.Service
@@ -1600,7 +1605,7 @@ func (c *Controller) runRcloneCmd(cmd []string) error {
 	case st := <-statusCh:
 		if st.StatusCode != 0 {
 			if rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "120"}); lgErr == nil {
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				b, _ := io.ReadAll(io.LimitReader(rc, 128*1024))
 				slog.Warn("rclone run non-zero exit", "cmd", strings.Join(cmd, " "), "code", st.StatusCode, "logs", string(b))
 			}
@@ -1610,7 +1615,7 @@ func (c *Controller) runRcloneCmd(cmd []string) error {
 	case err := <-errCh:
 		if err != nil {
 			if rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: true, Tail: "120"}); lgErr == nil {
-				defer rc.Close()
+				defer func() { _ = rc.Close() }()
 				b, _ := io.ReadAll(io.LimitReader(rc, 128*1024))
 				slog.Warn("rclone run failed", "cmd", strings.Join(cmd, " "), "error", err, "logs", string(b))
 			}
@@ -1665,7 +1670,7 @@ mc admin user svcacct add --expiry %s --name %s --json minio %s
     // read logs
     rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: false, Tail: "10"})
     if lgErr != nil { return "", "", 0, fmt.Errorf("mc logs: %v", lgErr) }
-    defer rc.Close()
+    defer func() { _ = rc.Close() }()
     b, _ := io.ReadAll(io.LimitReader(rc, 64*1024))
     // Parse JSON
     type resp struct { AccessKey string `json:"accessKey"`; SecretKey string `json:"secretKey"`; Expiration string `json:"expiration"` }
@@ -1707,7 +1712,7 @@ mc admin user svcacct list --json minio %s
     _, _ = c.cli.ContainerWait(c.ctx, cont.ID, container.WaitConditionNotRunning)
     rc, lgErr := c.cli.ContainerLogs(context.Background(), cont.ID, container.LogsOptions{ShowStdout: true, ShowStderr: false, Tail: "200"})
     if lgErr != nil { return lgErr }
-    defer rc.Close()
+    defer func() { _ = rc.Close() }()
     data, _ := io.ReadAll(io.LimitReader(rc, 256*1024))
     // mc may return multiple JSON lines; iterate
     lines := strings.Split(string(data), "\n")
@@ -1811,6 +1816,7 @@ func (c *Controller) cleanupOrphanedMounters() error {
 }
 
 // MetricsSnapshot is a read-only copy of controller metrics/state for exposition.
+// MetricsSnapshot is a read-only copy of controller metrics/state for exposition.
 type MetricsSnapshot struct {
 	ReconcileTotal      int64
 	ReconcileErrors     int64
@@ -1831,7 +1837,7 @@ type MetricsSnapshot struct {
 	ClaimsComputeMs     int64
 	DockerServiceListMs int64
 	DockerNodeListMs    int64
-	DockerApiErrors     int64
+	DockerAPIErrors     int64
 	CredsFetchOK        int64
 	CredsFetchErrors    int64
 	CredsBackoffTotal   int64
@@ -1863,7 +1869,7 @@ func (c *Controller) Snapshot() MetricsSnapshot {
 		ClaimsComputeMs:     c.lastClaimsComputeMs,
 		DockerServiceListMs: c.lastServiceListMs,
 		DockerNodeListMs:    c.lastNodeListMs,
-		DockerApiErrors:     c.dockerApiErrors,
+		DockerAPIErrors:     c.dockerAPIErrors,
 		CredsFetchOK:        c.credsFetchOK,
 		CredsFetchErrors:    c.credsFetchErrors,
 		CredsBackoffTotal:   c.credsBackoffTotal,

@@ -1,5 +1,18 @@
 run:
   timeout: 5m
+linters:
+  enable:
+    - errcheck
+    - govet
+    - gofmt
+  disable:
+    - revive
+    - gocritic
+    - staticcheck
+issues:
+  exclude-use-default: false
+run:
+  timeout: 5m
   go: '1.22'
 linters:
   enable:

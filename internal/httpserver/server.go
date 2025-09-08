@@ -1,3 +1,4 @@
+// Package httpserver contains HTTP server and routing for volkit.
 package httpserver
 
 import (
@@ -64,6 +65,7 @@ func getenvRaw(k string) string {
 }
 func getenvInt(k string, def int) int { v := strings.TrimSpace(os.Getenv(k)); if v=="" { return def }; if n,err := strconv.Atoi(v); err==nil { return n }; return def }
 func itoa(n int64) string { return strconv.FormatInt(n, 10) }
+// bool01 returns 1 for true and 0 for false.
 func bool01(b bool) string { if b { return "1" }; return "0" }
 
 // gzipIfJSON wraps responses that set Content-Type: application/json with gzip.
@@ -194,21 +196,21 @@ func BuildMux(o Options) (*http.ServeMux, *ws.Hub) {
     sharedClient := &http.Client{Timeout: 6 * time.Second, Transport: tr}
 
     // /ready
-    mux.HandleFunc("/ready", func(w http.ResponseWriter, r *http.Request) {
+    mux.HandleFunc("/ready", func(w http.ResponseWriter, _ *http.Request) {
         if o.Ctrl.Ready() == nil { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")); return }
         http.Error(w, "not ready", http.StatusServiceUnavailable)
     })
     // /healthz
-    mux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")) })
+    mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK); _, _ = w.Write([]byte("ok")) })
     // /status
-    mux.HandleFunc("/status", func(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, o.Ctrl.Snapshot()) })
+    mux.HandleFunc("/status", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, http.StatusOK, o.Ctrl.Snapshot()) })
     // /preflight
-    mux.HandleFunc("/preflight", func(w http.ResponseWriter, r *http.Request) {
+    mux.HandleFunc("/preflight", func(w http.ResponseWriter, _ *http.Request) {
         if err := o.Ctrl.Preflight(); err != nil { writeError(w, http.StatusPreconditionFailed, err.Error()); return }
         writeText(w, http.StatusOK, "ok")
     })
     // /reload
-    mux.HandleFunc("/reload", func(w http.ResponseWriter, r *http.Request) { writeText(w, http.StatusAccepted, "reconcile scheduled"); go o.Ctrl.Nudge() })
+    mux.HandleFunc("/reload", func(w http.ResponseWriter, _ *http.Request) { writeText(w, http.StatusAccepted, "reconcile scheduled"); go o.Ctrl.Nudge() })
     // /maintenance (rate-limited)
     lim := newLimiter(getenvInt("VOLKIT_RL_SENSITIVE_CAP", 10), getenvInt("VOLKIT_RL_SENSITIVE_RPS", 3))
     mux.HandleFunc("/maintenance/recompute", func(w http.ResponseWriter, r *http.Request) {
@@ -327,7 +329,7 @@ func BuildMux(o Options) (*http.ServeMux, *ws.Hub) {
     }
 
     // /validate (static+preflight)
-    mux.HandleFunc("/validate", func(w http.ResponseWriter, r *http.Request) {
+    mux.HandleFunc("/validate", func(w http.ResponseWriter, _ *http.Request) {
         w.Header().Set("Content-Type", "application/json")
         static := controller.ValidateConfig(o.Cfg)
         err := o.Ctrl.Preflight()
@@ -376,7 +378,7 @@ func BuildMux(o Options) (*http.ServeMux, *ws.Hub) {
             u := strings.TrimRight(base, "/") + "/creds?level=" + url.QueryEscape(lvl)
             req, _ := http.NewRequest(http.MethodGet, u, nil); if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" { req.Header.Set("If-None-Match", inm) }
             resp, err := sharedClient.Do(req)
-            if err == nil && resp != nil { defer resp.Body.Close(); if resp.StatusCode == http.StatusNotModified { writeEmpty(w, http.StatusNotModified); return }; if resp.StatusCode/100 == 2 { if et := strings.TrimSpace(resp.Header.Get("ETag")); et != "" { w.Header().Set("ETag", et) }; _, _ = io.Copy(w, resp.Body); return } }
+            if err == nil && resp != nil { defer func(){ _ = resp.Body.Close() }(); if resp.StatusCode == http.StatusNotModified { writeEmpty(w, http.StatusNotModified); return }; if resp.StatusCode/100 == 2 { if et := strings.TrimSpace(resp.Header.Get("ETag")); et != "" { w.Header().Set("ETag", et) }; _, _ = io.Copy(w, resp.Body); return } }
         }
         if issuerMode == "s3_admin" {
             ak := strings.TrimSpace(getenv("VOLKIT_ISSUER_ACCESS_KEY", ""))
@@ -392,8 +394,8 @@ func BuildMux(o Options) (*http.ServeMux, *ws.Hub) {
                 region := strings.TrimSpace(getenv("VOLKIT_S3_REGION", "us-east-1"))
                 dur := 3600; if v := strings.TrimSpace(getenv("VOLKIT_ISSUER_TTL_SEC", "")); v != "" { if n, err := strconv.Atoi(v); err == nil && n >= 900 && n <= 43200 { dur = n } }
                 insecure := strings.EqualFold(strings.TrimSpace(getenv("VOLKIT_ISSUER_INSECURE", "false")), "true")
-                if cred, err := issuer.AssumeRoleSTS(stsEndpoint, ak, sk, dur, region, insecure, o.TLSClientConfig); err == nil && cred.AccessKeyId != "" {
-                    env := o.Ctrl.BuildRcloneEnvPublic(); for i := range env { if strings.HasPrefix(env[i], "RCLONE_CONFIG_S3_ACCESS_KEY_ID=") { env[i] = "RCLONE_CONFIG_S3_ACCESS_KEY_ID=" + cred.AccessKeyId }; if strings.HasPrefix(env[i], "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=") { env[i] = "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=" + cred.SecretAccessKey } }; env = append(env, "RCLONE_CONFIG_S3_SESSION_TOKEN="+cred.SessionToken)
+                if cred, err := issuer.AssumeRoleSTS(stsEndpoint, ak, sk, dur, region, insecure, o.TLSClientConfig); err == nil && cred.AccessKeyID != "" {
+                    env := o.Ctrl.BuildRcloneEnvPublic(); for i := range env { if strings.HasPrefix(env[i], "RCLONE_CONFIG_S3_ACCESS_KEY_ID=") { env[i] = "RCLONE_CONFIG_S3_ACCESS_KEY_ID=" + cred.AccessKeyID }; if strings.HasPrefix(env[i], "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=") { env[i] = "RCLONE_CONFIG_S3_SECRET_ACCESS_KEY=" + cred.SecretAccessKey } }; env = append(env, "RCLONE_CONFIG_S3_SESSION_TOKEN="+cred.SessionToken)
                     expiresAt := cred.Expiration.Unix(); buf, _ := json.Marshal(struct{ RcloneEnv []string `json:"rcloneEnv"` }{RcloneEnv: env}); sum := sha256.Sum256(buf); etag := "\"" + hex.EncodeToString(sum[:]) + "\""; if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" && inm == etag { w.WriteHeader(http.StatusNotModified); return }
                     w.Header().Set("ETag", etag); writeJSON(w, http.StatusOK, map[string]any{"level": lvl, "rcloneEnv": env, "etag": etag, "expiresAt": expiresAt, "issuer": "s3_admin_sts"}); return
                 }
@@ -414,7 +416,7 @@ func BuildMux(o Options) (*http.ServeMux, *ws.Hub) {
 
     // /metrics
     if getenv("VOLKIT_ENABLE_METRICS", "false") == "true" {
-        mux.HandleFunc("/metrics", func(w http.ResponseWriter, r *http.Request) {
+        mux.HandleFunc("/metrics", func(w http.ResponseWriter, _ *http.Request) {
             w.Header().Set("Content-Type", "text/plain; version=0.0.4")
             s := o.Ctrl.Snapshot()
             build := map[string]string{ "version": strings.TrimSpace(getenv("VOLKIT_BUILD_VERSION", "dev")), "go_version": runtime.Version() }

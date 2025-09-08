@@ -1,3 +1,4 @@
+// Package ws implements a minimal WebSocket hub.
 package ws
 
 import (
@@ -164,8 +165,8 @@ func InitClient(c *websocket.Conn, queueSize int, readSec int) *Client {
     c.EnableWriteCompression(true)
     _ = c.SetCompressionLevel(flate.BestSpeed)
     c.SetReadLimit(1 << 20)
-    c.SetReadDeadline(time.Now().Add(time.Duration(readSec) * time.Second))
-    c.SetPongHandler(func(string) error { c.SetReadDeadline(time.Now().Add(time.Duration(readSec) * time.Second)); return nil })
+    _ = c.SetReadDeadline(time.Now().Add(time.Duration(readSec) * time.Second))
+    c.SetPongHandler(func(string) error { _ = c.SetReadDeadline(time.Now().Add(time.Duration(readSec) * time.Second)); return nil })
     return cl
 }
 
@@ -175,7 +176,8 @@ func (cl *Client) Writer(h *Hub) {
         if h.WriteTimeoutSec > 0 { _ = cl.Conn.SetWriteDeadline(time.Now().Add(time.Duration(h.WriteTimeoutSec) * time.Second)) }
         if err := cl.Conn.WriteJSON(msg); err != nil {
             atomic.AddInt64(&h.SendErrorsTotal, 1)
-            if h.CloseOnError { break } else { continue }
+            if h.CloseOnError { break }
+            continue
         }
     }
 }
