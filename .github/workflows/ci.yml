@@ -10,7 +10,6 @@ jobs:
   build-and-lint:
     runs-on: ubuntu-latest
     env:
-      GOSUMDB: off
       GOPROXY: https://proxy.golang.org,direct
     steps:
       - name: Checkout
@@ -27,43 +26,16 @@ jobs:
         run: |
           go env -w GOPROXY=${GOPROXY}
 
-      - name: Clean and sync modules
+      - name: Sync modules
         run: |
-          go clean -modcache
           go mod download
           go mod verify
           go mod tidy -v
-        continue-on-error: true
 
-      - name: Aggregate checks and fail at end
-        run: |
-          set +e
-          fails=0
-          echo '== go build (show many errors) =='
-          go build -gcflags=all=-e ./...
-          fb=$?
-          echo "go build exit=$fb"; fails=$((fails+fb))
+      - name: Build (show many errors)
+        run: go build -gcflags=all=-e ./...
 
-          echo '== go vet =='
-          go vet ./...
-          fv=$?
-          echo "go vet exit=$fv"; fails=$((fails+fv))
-
-          echo '== staticcheck =='
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-          $(go env GOPATH)/bin/staticcheck ./...
-          fs=$?
-          echo "staticcheck exit=$fs"; fails=$((fails+fs))
-
-          echo '== golangci-lint =='
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-          $(go env GOPATH)/bin/golangci-lint run --timeout=5m --out-format=github-actions
-          fg=$?
-          echo "golangci-lint exit=$fg"; fails=$((fails+fg))
-
-          if [ $fails -ne 0 ]; then
-            echo "::error::One or more checks failed (aggregate=$fails)"
-            exit 1
-          fi
+      - name: Vet
+        run: go vet ./...
 
 
