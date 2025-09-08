@@ -18,9 +18,9 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -28,12 +28,8 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/swarmnative/volkit/internal/controller"
 	"github.com/swarmnative/volkit/internal/httpserver"
-	"github.com/swarmnative/volkit/internal/issuer"
 	"github.com/swarmnative/volkit/internal/pki"
 	"github.com/swarmnative/volkit/internal/ws"
-	"crypto/rand"
-	"encoding/pem"
-	"math/big"
 )
 
 func main() {
@@ -123,75 +119,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	mux, hub := httpserver.BuildMux(httpserver.Options{Ctx: ctx, Ctrl: ctrl, Cfg: cfg, TLSClientConfig: tlsClientConfig, BroadcastCacheHits: &wsBroadcastCacheHits, BroadcastCacheMiss: &wsBroadcastCacheMiss, AgentStatusCount: &agentStatusCount})
-
-	// simple in-memory rate limiter for lightweight endpoints
-	var rlMu sync.Mutex
-	lastHit := map[string]time.Time{}
-	tryRateLimit := func(key string, minInterval time.Duration) bool {
-		rlMu.Lock(); defer rlMu.Unlock()
-		if t, ok := lastHit[key]; ok {
-			if time.Since(t) < minInterval { return false }
-		}
-		lastHit[key] = time.Now()
-		return true
-	}
-
-	// initialize internal CA material for /pki/enroll (file-based CA or ephemeral dev CA)
-	pki.LoadCA()
-
-	// simplified auth: file-based mTLS or disabled for dev, with optional node binding checks
-	authOK := func(r *http.Request) bool {
-		if getenv("AUTH_DISABLE", "false") == "true" { return true }
-		// require TLS when not disabled
-		return r.TLS != nil
-	}
-	peerNodeFromTLS := func(r *http.Request) string {
-		if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 { return "" }
-		crt := r.TLS.PeerCertificates[0]
-		// prefer SAN DNSNames/IPs, fallback CN
-		if len(crt.DNSNames) > 0 { return strings.TrimSpace(crt.DNSNames[0]) }
-		if len(crt.IPAddresses) > 0 { return strings.TrimSpace(crt.IPAddresses[0].String()) }
-		return strings.TrimSpace(crt.Subject.CommonName)
-	}
-
-	// Optional file-based mTLS client config (no external dependency)
 	var tlsClientConfig *tls.Config
-	{
-		clientCert := strings.TrimSpace(getenv("VOLKIT_TLS_CLIENT_CERT_FILE", ""))
-		clientKey := strings.TrimSpace(getenv("VOLKIT_TLS_CLIENT_KEY_FILE", ""))
-		serverCA := strings.TrimSpace(getenv("VOLKIT_TLS_SERVER_CA_FILE", ""))
-		if clientCert != "" || clientKey != "" || serverCA != "" {
-			cfg := &tls.Config{MinVersion: tls.VersionTLS12}
-			if serverCA != "" {
-				pem, err := os.ReadFile(serverCA)
-				if err == nil {
-					pool := x509.NewCertPool()
-					if pool.AppendCertsFromPEM(pem) { cfg.RootCAs = pool }
-				}
-			}
-			if clientCert != "" && clientKey != "" {
-				if pair, err := tls.LoadX509KeyPair(clientCert, clientKey); err == nil {
-					cfg.Certificates = []tls.Certificate{pair}
-				}
-			}
-			tlsClientConfig = cfg
-		}
-	}
+	mux, hub := httpserver.BuildMux(httpserver.Options{Ctx: ctx, Ctrl: ctrl, Cfg: cfg, TLSClientConfig: tlsClientConfig})
 
 	// global broadcast pause switch (runtime maintenance)
 	var broadcastPaused int32
 	var (
-		wsClientsGauge       int64
 		wsBroadcastCacheHits  int64
 		wsBroadcastCacheMiss  int64
 		agentStatusCount     int64
-		agentStatusRateLimit int64
-		wsBroadcastTotal int64
-		wsSendErrorsTotal int64
-		wsQueueDropTotal int64
-		wsBroadcastNodesTotal int64
-		wsBroadcastDurationMs int64
 	)
 
 	// per-node claims ETag cache (in-memory, version-scoped)
